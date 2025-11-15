@@ -22,7 +22,9 @@ import retirement
 import last_period
 import post_decision
 import G2EGM
+import G2EGMSmooth
 import NEGM
+import NEGMSmooth
 import simulate
 
 class G2EGMModelClass(ModelClass):
@@ -91,6 +93,7 @@ class G2EGMModelClass(ModelClass):
 
         # misc
         par.solmethod = 'G2EGM'
+        par.sigma = 0.0  # taste shock scale parameter (0 = no smoothing, standard G2EGM)
         par.egm_extrap_add = 2
         par.egm_extrap_w = -0.25
         par.delta_con = 0.001
@@ -148,7 +151,7 @@ class G2EGMModelClass(ModelClass):
         if par.solmethod == 'G2EGM':
 
             # i. dcon
-            par.d_dcon = np.zeros((par.Na_pd,par.Nb_pd),dtype=np.float_,order='C')
+            par.d_dcon = np.zeros((par.Na_pd,par.Nb_pd),dtype=np.float64,order='C')
                 
             # ii. acon
             par.Nc_acon = np.int_(np.floor(par.Na_pd*par.acon_fac))
@@ -168,7 +171,7 @@ class G2EGMModelClass(ModelClass):
             par.a_con = np.zeros(par.c_con.shape)
             par.d_con = np.zeros(par.c_con.shape)
         
-        elif par.solmethod == 'NEGM':
+        elif par.solmethod in ['NEGM', 'NEGMSmooth']:
 
             par.grid_l = par.grid_m
 
@@ -192,8 +195,12 @@ class G2EGMModelClass(ModelClass):
 
         if self.par.solmethod == 'G2EGM':
             self.solve_G2EGM()
+        elif self.par.solmethod == 'G2EGMSmooth':
+            self.solve_G2EGMSmooth()
         elif self.par.solmethod == 'NEGM':
             self.solve_NEGM()
+        elif self.par.solmethod == 'NEGMSmooth':
+            self.solve_NEGMSmooth()
 
     def precompile_numba(self):
         """ solve the model with very coarse grids"""
@@ -241,7 +248,7 @@ class G2EGMModelClass(ModelClass):
         sol.inv_vn_ret = np.zeros((par.T,par.Nm_ret))
 
         # b. working
-        if par.solmethod == 'G2EGM':
+        if par.solmethod in ['G2EGM', 'G2EGMSmooth']:
 
             sol.c = np.zeros((par.T,par.Nn,par.Nm))
             sol.d = np.zeros((par.T,par.Nn,par.Nm))
@@ -270,7 +277,7 @@ class G2EGMModelClass(ModelClass):
             sol.wa = np.zeros((par.T-1,par.Nb_pd,par.Na_pd))
             sol.wb = np.zeros((par.T-1,par.Nb_pd,par.Na_pd))
             
-        elif par.solmethod == 'NEGM':
+        elif par.solmethod in ['NEGM', 'NEGMSmooth']:
 
             sol.c = np.zeros((par.T,par.Nn,par.Nm))
             sol.d = np.zeros((par.T,par.Nn,par.Nm))
@@ -343,6 +350,64 @@ class G2EGMModelClass(ModelClass):
             if par.do_print:
                 print(f'solved working problem in {np.sum(par.time_work):.2f} secs')
 
+    def solve_G2EGMSmooth(self):
+        """ solve with G2EGM with taste shocks (smooth version) """
+        
+        with jit(self) as model:
+
+            par = model.par
+            sol = model.sol
+
+            if par.do_print:
+                print(f'Solving with G2EGMSmooth (sigma={par.sigma}):')
+
+            # a. solve retirement
+            t0 = time.time()
+
+            retirement.solve(sol,par)
+
+            if par.do_print:
+                print(f'solved retirement problem in {time.time()-t0:.2f} secs')
+
+            # b. solve last period working
+            t0 = time.time()
+
+            last_period.solve(sol,par)
+
+            if par.do_print:
+                print(f'solved last period working in {time.time()-t0:.2f} secs')
+
+            # c. solve working
+            for t in reversed(range(par.T-1)):
+                
+                t0 = time.time()
+                
+                if par.do_print:
+                    print(f' t = {t}:')
+                
+                # i. post decision
+                t0_w = time.time()
+
+                post_decision.compute(t,sol,par)
+
+                par.time_w[t] = time.time()-t0_w
+                if par.do_print:
+                    print(f'   computed post decision value function in {par.time_w[t]:.2f} secs')
+
+                # ii. EGM with smooth max
+                t0_EGM = time.time()
+                
+                G2EGMSmooth.solve(t,sol,par)
+                
+                par.time_egm[t] = time.time()-t0_EGM
+                if par.do_print:
+                    print(f'   applied G2EGMSmooth in {par.time_egm[t]:.2f} secs')
+
+                par.time_work[t] = time.time()-t0
+
+            if par.do_print:
+                print(f'solved working problem in {np.sum(par.time_work):.2f} secs')
+
     def solve_NEGM(self):
         """ solve with NEGM """
         
@@ -400,6 +465,73 @@ class G2EGMModelClass(ModelClass):
                 t0_vfi = time.time()
                 
                 NEGM.solve_outer(t,sol,par)
+                
+                par.time_vfi[t] = time.time()-t0_vfi
+                if par.do_print:
+                    print(f'   solved outer problem in {par.time_vfi[t] :.2f} secs')
+
+                par.time_work[t] = time.time()-t0
+
+            if par.do_print:
+                print(f'solved working problem in {np.sum(par.time_work):.2f} secs')
+
+    def solve_NEGMSmooth(self):
+        """ solve with NEGM with taste shocks (smooth version) """
+        
+        with jit(self) as model:
+
+            par = model.par
+            sol = model.sol
+
+            if par.do_print:
+                print(f'Solving with NEGMSmooth (sigma={par.sigma}):')
+
+            # a. solve retirement
+            t0 = time.time()
+
+            retirement.solve(sol,par,G2EGM=False)
+
+            if par.do_print:
+                print(f'solved retirement problem in {time.time()-t0:.2f} secs')
+
+            # b. solve last period working
+            t0 = time.time()
+
+            last_period.solve(sol,par,G2EGM=False)
+
+            if par.do_print:
+                print(f'solved last period working in {time.time()-t0:.2f} secs')
+
+            # c. solve working  
+            for t in reversed(range(par.T-1)):
+                
+                t0 = time.time()   
+                
+                if par.do_print:
+                    print(f' t = {t}:')
+                
+                # i. post decision
+                t0_w = time.time()
+
+                post_decision.compute(t,sol,par,G2EGM=False)
+
+                par.time_w[t] = time.time() - t0_w
+                if par.do_print:
+                    print(f'   computed post decision value function in {par.time_w[t]:.2f} secs')
+
+                # ii. pure consumption problem
+                t0_egm = time.time()
+                
+                NEGM.solve_pure_c(t,sol,par)
+                
+                par.time_egm[t] = time.time()-t0_egm
+                if par.do_print:
+                    print(f'   solved pure consumption problem in {par.time_egm[t]:.2f} secs')
+
+                # iii. outer problem with smooth max
+                t0_vfi = time.time()
+                
+                NEGMSmooth.solve_outer(t,sol,par)
                 
                 par.time_vfi[t] = time.time()-t0_vfi
                 if par.do_print:
