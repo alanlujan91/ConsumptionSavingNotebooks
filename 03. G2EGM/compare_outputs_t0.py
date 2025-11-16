@@ -12,10 +12,7 @@ results = {}
 
 for method in ['G2EGM', 'NEGM']:
     print(f"\nSolving {method}...")
-    model = G2EGMModelClass(name=f'test_{method}')
-    model.par.solmethod = method
-    model.par.do_print = False
-    model.allocate()
+    model = G2EGMModelClass(name=f'test_{method}', par={'solmethod': method, 'do_print': False})
     model.solve()
     
     t = 0

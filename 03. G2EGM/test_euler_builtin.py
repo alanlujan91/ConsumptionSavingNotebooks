@@ -11,9 +11,7 @@ print("="*70)
 
 # G2EGM
 print("\nSolving G2EGM...")
-model_g2egm = G2EGMModelClass(name='G2EGM')
-model_g2egm.par.solmethod = 'G2EGM'
-model_g2egm.par.T = 20
+model_g2egm = G2EGMModelClass(name='G2EGM', par={'solmethod': 'G2EGM', 'T': 20})
 try:
     model_g2egm.solve()
     model_g2egm.calculate_euler()
@@ -34,9 +32,7 @@ except Exception as e:
 
 # NEGM
 print("\nSolving NEGM...")
-model_negm = G2EGMModelClass(name='NEGM')
-model_negm.par.solmethod = 'NEGM'
-model_negm.par.T = 20
+model_negm = G2EGMModelClass(name='NEGM', par={'solmethod': 'NEGM', 'T': 20})
 try:
     model_negm.solve()
     model_negm.calculate_euler()
