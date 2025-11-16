@@ -169,6 +169,8 @@ class G2EGMModelClass(ModelClass):
             par.a_con = np.zeros(par.c_con.shape)
             par.d_con = np.zeros(par.c_con.shape)
 
+        # d. NEGM uses grid_m directly (original used grid_l = grid_m for semantic clarity)
+        
         # e. shocks
         assert (par.Neta == 1 and par.var_eta == 0) or (par.Neta > 1 and par.var_eta > 0)
 
@@ -267,6 +269,7 @@ class G2EGMModelClass(ModelClass):
             sol.wa = np.zeros((par.T-1,par.Nb_pd,par.Na_pd))
             sol.wb = np.zeros((par.T-1,par.Nb_pd,par.Na_pd))
             
+            # NEGM-specific arrays allocated as empty for namespace compatibility
             sol.c_pure_c = np.zeros((0,0,0))
             sol.inv_v_pure_c = np.zeros((0,0,0))
             

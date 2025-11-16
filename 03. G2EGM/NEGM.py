@@ -10,6 +10,7 @@ from consav import golden_section_search
 import utility
 import pens
 
+# Note: uses par.grid_m directly (original used par.grid_l for semantic clarity)
 negm_upperenvelope = upperenvelope.create(utility.func,use_inv_w=False)
 
 @njit

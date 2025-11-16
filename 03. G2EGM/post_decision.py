@@ -12,7 +12,7 @@ def logsumexp(v_work, v_retire, sigma):
     Args:
         v_work: value of working
         v_retire: value of retiring
-        sigma: taste shock scale parameter
+        sigma: taste shock scale parameter (>= 0, negative treated as zero)
     
     Returns:
         smooth maximum value
@@ -119,6 +119,7 @@ def compute(t,sol,par,G2EGM=True):
                 
                 if par.sigma > 0.0:
                     # Smoothing enabled: use logsumexp for value and probability-weighted derivatives
+                    # Note: inverse values guaranteed non-zero by algorithm
                     v_work = -1.0/inv_v_plus[i_a]
                     v_retire = -1.0/inv_v_ret_plus[i_a]
                     
@@ -139,6 +140,7 @@ def compute(t,sol,par,G2EGM=True):
                         wb_now = p_work * wb_work + (1.0 - p_work) * wb_retire
                 else:
                     # No smoothing: discrete max based on inverse values
+                    # Direct comparison preserves original behavior (backward compatible)
                     if inv_v_ret_plus[i_a] > inv_v_plus[i_a]:
                         w_now = -1.0/inv_v_ret_plus[i_a]
                         wa_now = 1.0/inv_vm_ret_plus[i_a]
