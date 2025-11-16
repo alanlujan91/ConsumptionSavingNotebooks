@@ -10,7 +10,6 @@ from consav import golden_section_search
 import utility
 import pens
 
-# Note: uses par.grid_m directly (original used par.grid_l for semantic clarity)
 negm_upperenvelope = upperenvelope.create(utility.func,use_inv_w=False)
 
 @njit
@@ -37,10 +36,10 @@ def solve_pure_c(t,sol,par):
     
         # upperenvelope
         negm_upperenvelope(par.grid_a_pd,temp_m,temp_c,w[i_b],
-            par.grid_m,c[i_b,:],temp_v,par)        
+            par.grid_l,c[i_b,:],temp_v,par)        
 
         # negative inverse
-        for i_m in range(par.Na_pd):
+        for i_m in range(par.Nm):
             inv_v[i_b,i_m] = -1/temp_v[i_m]
 
 @njit
@@ -54,7 +53,7 @@ def obj_outer(d,n,m,t,sol,par):
     n_pure_c = n + d + pens.func(d,par)
     
     # c. value-of-choice
-    return -linear_interp.interp_2d(par.grid_b_pd,par.grid_m,sol.inv_v_pure_c[t],n_pure_c,m_pure_c)  # we are minimizing
+    return -linear_interp.interp_2d(par.grid_b_pd,par.grid_l,sol.inv_v_pure_c[t],n_pure_c,m_pure_c)  # we are minimizing
 
 @njit
 def solve_outer(t,sol,par):
@@ -83,13 +82,13 @@ def solve_outer(t,sol,par):
             # b. optimal value
             n_pure_c = n + d[i_n,i_m] + pens.func(d[i_n,i_m],par)
             m_pure_c = m - d[i_n,i_m]
-            c[i_n,i_m] = np.fmin(linear_interp.interp_2d(par.grid_b_pd,par.grid_m,sol.c_pure_c[t],n_pure_c,m_pure_c),m_pure_c)
+            c[i_n,i_m] = np.fmin(linear_interp.interp_2d(par.grid_b_pd,par.grid_l,sol.c_pure_c[t],n_pure_c,m_pure_c),m_pure_c)
             inv_v[i_n,i_m] = -obj_outer(d[i_n,i_m],n,m,t,sol,par)
 
             # c. dcon
             obj_dcon = -obj_outer(0,n,m,t,sol,par)
             if obj_dcon > inv_v[i_n,i_m]:
-                c[i_n,i_m] = linear_interp.interp_2d(par.grid_b_pd,par.grid_m,sol.c_pure_c[t],n,m)
+                c[i_n,i_m] = linear_interp.interp_2d(par.grid_b_pd,par.grid_l,sol.c_pure_c[t],n,m)
                 d[i_n,i_m] = 0
                 inv_v[i_n,i_m] = obj_dcon
 

@@ -5,57 +5,6 @@ from numba import njit
 from consav import linear_interp # for linear interpolation
 
 @njit
-def logsumexp(v_work, v_retire, sigma):
-    """
-    Compute smooth max using logsumexp formula.
-    
-    Args:
-        v_work: value of working
-        v_retire: value of retiring
-        sigma: taste shock scale parameter (>= 0, negative treated as zero)
-    
-    Returns:
-        smooth maximum value
-    """
-    if sigma <= 0.0:
-        return max(v_work, v_retire)
-    
-    # Numerical stability: subtract max before exponentiating
-    v_max = max(v_work, v_retire)
-    v_work_shifted = v_work - v_max
-    v_retire_shifted = v_retire - v_max
-    
-    log_sum_exp = np.log(np.exp(v_work_shifted / sigma) + np.exp(v_retire_shifted / sigma))
-    
-    return v_max + sigma * log_sum_exp
-
-@njit
-def choice_probs(v_work, v_retire, sigma):
-    """
-    Compute choice probabilities using logit formula.
-    
-    Args:
-        v_work: value of working
-        v_retire: value of retiring
-        sigma: taste shock scale parameter
-    
-    Returns:
-        probability of working
-    """
-    if sigma <= 0.0:
-        return 1.0 if v_work >= v_retire else 0.0
-    
-    # Numerical stability
-    v_max = max(v_work, v_retire)
-    v_work_shifted = v_work - v_max
-    v_retire_shifted = v_retire - v_max
-    
-    exp_work = np.exp(v_work_shifted / sigma)
-    exp_retire = np.exp(v_retire_shifted / sigma)
-    
-    return exp_work / (exp_work + exp_retire)
-
-@njit
 def compute(t,sol,par,G2EGM=True):
 
     # unpack
@@ -113,44 +62,16 @@ def compute(t,sol,par,G2EGM=True):
             # iv. accumulate
             for i_a in range(par.Na_pd):
 
-                # Choose based on higher inverse value (corresponds to higher actual value)
-                # With smoothing (par.sigma > 0): use logsumexp and probability weighting
-                # Without smoothing (par.sigma = 0): discrete max
-                
-                if par.sigma > 0.0:
-                    # Smoothing enabled: use logsumexp for value and probability-weighted derivatives
-                    # Note: inverse values guaranteed non-zero by algorithm
-                    v_work = -1.0/inv_v_plus[i_a]
-                    v_retire = -1.0/inv_v_ret_plus[i_a]
-                    
-                    # Smooth max using logsumexp
-                    w_now = logsumexp(v_work, v_retire, par.sigma)
-                    
-                    # Choice probability for working
-                    p_work = choice_probs(v_work, v_retire, par.sigma)
-                    
-                    # Probability-weighted marginal values
-                    wa_work = 1.0/inv_vm_plus[i_a]
-                    wa_retire = 1.0/inv_vm_ret_plus[i_a]
-                    wa_now = p_work * wa_work + (1.0 - p_work) * wa_retire
-                    
+                if inv_v_ret_plus[i_a] > inv_v_plus[i_a]:
+                    w_now = -1.0/inv_v_ret_plus[i_a]
+                    wa_now = 1.0/inv_vm_ret_plus[i_a]
                     if G2EGM:
-                        wb_work = 1.0/inv_vn_plus[i_a]
-                        wb_retire = 1.0/inv_vn_ret_plus[i_a]
-                        wb_now = p_work * wb_work + (1.0 - p_work) * wb_retire
+                        wb_now = 1.0/inv_vn_ret_plus[i_a]
                 else:
-                    # No smoothing: discrete max based on inverse values
-                    # Direct comparison preserves original behavior (backward compatible)
-                    if inv_v_ret_plus[i_a] > inv_v_plus[i_a]:
-                        w_now = -1.0/inv_v_ret_plus[i_a]
-                        wa_now = 1.0/inv_vm_ret_plus[i_a]
-                        if G2EGM:
-                            wb_now = 1.0/inv_vn_ret_plus[i_a]
-                    else:
-                        w_now = -1.0/inv_v_plus[i_a]
-                        wa_now = 1.0/inv_vm_plus[i_a]
-                        if G2EGM:
-                            wb_now = 1.0/inv_vn_plus[i_a]
+                    w_now = -1.0/inv_v_plus[i_a]
+                    wa_now = 1.0/inv_vm_plus[i_a]
+                    if G2EGM:
+                        wb_now = 1.0/inv_vn_plus[i_a]
                 
                 w[i_b,i_a] += par.w_eta[i_eta]*par.beta*w_now
                 wa[i_b,i_a] += par.w_eta[i_eta]*par.Ra*par.beta*wa_now

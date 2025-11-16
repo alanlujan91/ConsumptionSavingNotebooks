@@ -1,6 +1,17 @@
 # NEGM Smooth - Mathematical Structure
 
-# NEGM Smooth - Mathematical Structure
+## Model Overview
+
+This is a **pension and retirement choice model** where households make three key decisions:
+1. **Consumption** ($c$): How much to consume
+2. **Pension contributions** ($d$): How much to contribute to pension wealth
+3. **Work vs Retire**: Whether to continue working or retire (discrete choice with taste shocks)
+
+State variables:
+- $m$ = liquid wealth (cash-on-hand)
+- $n$ = pension wealth (illiquid, accumulates from contributions)
+
+The pension utility function $\psi(d)$ captures the benefit of pension contributions (e.g., tax advantages, employer matching).
 
 ## Step 0: Post-Decision Value with Taste Shocks (Work vs Retire)
 
@@ -18,15 +29,22 @@ $$
 
 ### Alternative Values (Next Period)
 
+**Work alternative:**
 $$
 V_{\text{work},t+1}(m_{t+1}, n_{t+1}) = V_{t+1}(m_{t+1}, n_{t+1})
 $$
 
+**Retire alternative:**
 $$
 V_{\text{retire},t+1}(m_{t+1}, n_{t+1}) = V^{\text{ret}}_{t+1}(m_{t+1} + n_{t+1})
 $$
 
-where values are evaluated at $(m_{t+1}, n_{t+1}) = (R_a a^{\times} + y_{t+1}, R_b b^{\times})$.
+where values are evaluated at post-decision states that evolve as:
+- $m_{t+1} = R_a a^{\times} + y_{t+1}$ (liquid wealth next period: returns on liquid assets plus income)
+- $n_{t+1} = R_b b^{\times}$ (pension wealth next period: returns on pension contributions)
+- Upon retirement, pension wealth $n$ is liquidated and added to liquid wealth $m$
+
+**Implementation note:** The algorithm works with inverse values $-1/V$ for numerical stability, but the mathematics below uses direct values for clarity.
 
 ### Smooth Max over Alternatives
 
@@ -40,8 +58,24 @@ $$
 \tilde{V}_{t+1}(m_{t+1}, n_{t+1}) = \mathbb{E}_{\varepsilon}\left[\max_{j \in \mathcal{J}} \{V_{j,t+1} + \sigma \varepsilon_j\}\right]
 $$
 
+Using properties of EV Type I distribution:
 $$
 = \sigma \log\left(\sum_{j \in \mathcal{J}} \exp\left(\frac{V_{j,t+1}}{\sigma}\right)\right)
+$$
+
+### Choice Probabilities (Logit Formula)
+
+$$
+P_{j,t+1}(m_{t+1}, n_{t+1}) = \frac{\exp(V_{j,t+1}/\sigma)}{\sum_{k \in \mathcal{J}} \exp(V_{k,t+1}/\sigma)}
+$$
+
+Specifically:
+$$
+P_{\text{work},t+1} = \frac{\exp(V_{\text{work},t+1}/\sigma)}{\exp(V_{\text{work},t+1}/\sigma) + \exp(V_{\text{retire},t+1}/\sigma)}
+$$
+
+$$
+P_{\text{retire},t+1} = 1 - P_{\text{work},t+1}
 $$
 
 ### Post-Decision Value
@@ -52,30 +86,47 @@ $$
 
 ### Marginal Post-Decision Value
 
-For smooth case (σ > 0), marginal value is probability-weighted:
+**Key insight:** By the envelope theorem for the smooth max operator:
 
 $$
-P_{\text{work},t+1} = \frac{\exp(V_{\text{work},t+1}/\sigma)}{\exp(V_{\text{work},t+1}/\sigma) + \exp(V_{\text{retire},t+1}/\sigma)}
+\frac{\partial \tilde{V}_{t+1}}{\partial m_{t+1}} = \sum_{j \in \mathcal{J}} P_{j,t+1} \cdot \frac{\partial V_{j,t+1}}{\partial m_{t+1}}
+$$
+
+Therefore:
+$$
+\frac{\partial \tilde{V}_{t+1}}{\partial m_{t+1}} = P_{\text{work},t+1} \cdot V_{m,\text{work},t+1} + P_{\text{retire},t+1} \cdot V^{\text{ret}}_{m,t+1}
+$$
+
+And the marginal post-decision value is:
+$$
+w_{a}(b^{\times}, a^{\times}) = \beta R_a \mathbb{E}_{y}\left[\frac{\partial \tilde{V}_{t+1}}{\partial m_{t+1}}\right]
 $$
 
 $$
-P_{\text{retire},t+1} = \frac{\exp(V_{\text{retire},t+1}/\sigma)}{\exp(V_{\text{work},t+1}/\sigma) + \exp(V_{\text{retire},t+1}/\sigma)}
+= \beta R_a \mathbb{E}_{y}\left[P_{\text{work},t+1} \cdot V_{m,\text{work},t+1} + P_{\text{retire},t+1} \cdot V^{\text{ret}}_{m,t+1}\right]
 $$
 
+where the probabilities $P_{j,t+1}$ are evaluated at each realization of the income shock $y_{t+1}$, making them random variables inside the expectation.
+
+**For G2EGM, similarly:**
 $$
-w_{a}(b^{\times}, a^{\times}) = \beta R_a \mathbb{E}_{y}\left[P_{\text{work},t+1} \cdot V_{m,t+1} + P_{\text{retire},t+1} \cdot V^{\text{ret}}_{m,t+1}\right]
+w_{b}(b^{\times}, a^{\times}) = \beta R_b \mathbb{E}_{y}\left[P_{\text{work},t+1} \cdot V_{n,\text{work},t+1} + P_{\text{retire},t+1} \cdot V^{\text{ret}}_{m,t+1}\right]
 $$
+
+Note: For retirement, $\frac{\partial V^{\text{ret}}}{\partial n} = \frac{\partial V^{\text{ret}}}{\partial m}$ since pension wealth $n$ is liquidated and added to liquid wealth $m$ upon retirement.
 
 ## Step 1: EGM - Solve Pure Consumption Problem
+
+This step solves for optimal consumption $c$ conditional on pension contribution $d$ (equivalently, conditional on post-decision pension wealth $b^\times$).
 
 ### Post-Decision States
 
 $$
-b^{\times} = \text{post-decision durables}
+b^{\times} = \text{post-decision pension wealth}
 $$
 
 $$
-a^{\times} = \text{post-decision assets}
+a^{\times} = \text{post-decision liquid assets}
 $$
 
 ### State Evolution
@@ -131,16 +182,18 @@ $$
 \left[\mathbf{c}_{\text{pure}}, \mathbf{v}_{\text{pure}}\right] = \text{upperenvelope}\left(a^{\times}, m^{\cap}, c, w \,|\, m^{\times}\right)
 $$
 
-## Step 2: VFI - Optimize Durables Choice
+## Step 2: VFI - Optimize Pension Contribution
+
+This step optimizes the pension contribution $d$ given current state $(m, n)$.
 
 ### Current Period States
 
 $$
-n = \text{beginning-of-period durables}
+n = \text{beginning-of-period pension wealth}
 $$
 
 $$
-m = \text{cash-on-hand}
+m = \text{liquid wealth (cash-on-hand)}
 $$
 
 ### Post-Decision State Mapping
@@ -153,13 +206,32 @@ $$
 m^{\times}(d) = m - d
 $$
 
+where:
+- $d$ = pension contribution (can be positive or negative, representing contributions or withdrawals)
+- $\psi(d)$ = pension utility function (captures tax advantages, employer matching, etc.)
+- $b^\times(d)$ = post-decision pension wealth (current pension $n$ plus contribution $d$ plus pension benefits $\psi(d)$)
+- $m^\times(d)$ = remaining liquid wealth after pension contribution
+
 ### Objective Function (Negative Inverse Value)
 
+The algorithm stores inverse values as $\text{inv\_v}_{\text{pure}} = -1/v_{\text{pure}}$.
+
+The objective function for optimization is:
 $$
-\Phi(d; m, n) = -\frac{1}{u(m^{\times}(d)) + w(b^{\times}(d), 0)}
+\Phi(d; m, n) = -\text{inv\_v}_{\text{pure}}(b^{\times}(d), m^{\times}(d)) = \frac{1}{v_{\text{pure}}(b^{\times}(d), m^{\times}(d))}
 $$
 
-Note: Minimize $\Phi$ is equivalent to maximizing value since $v = -1/\Phi$.
+where:
+$$
+v_{\text{pure}}(b^{\times}, m^{\times}) = u(m^{\times}) + w(b^{\times}, 0)
+$$
+
+**Key insight:** Minimizing $\Phi = 1/v$ is equivalent to maximizing $v$ (since $v > 0$).
+
+Therefore:
+$$
+d^*(m,n) = \arg\min_{d \in [0,m]} \Phi(d; m, n) = \arg\max_{d \in [0,m]} v_{\text{pure}}(b^{\times}(d), m^{\times}(d))
+$$
 
 ### Interior Solution ($d^* \in (0, m)$)
 
@@ -183,14 +255,14 @@ $$
 v_{\text{int}}(m, n) = -\Phi(d^*_{\text{int}}; m, n)
 $$
 
-### Durables Constrained ($d = 0$)
+### No Pension Contribution Corner ($d = 0$)
 
 $$
-b^{\times}_{\text{dcon}} = n
+b^{\times}_{\text{con}} = n
 $$
 
 $$
-m^{\times}_{\text{dcon}} = m
+m^{\times}_{\text{con}} = m
 $$
 
 $$
@@ -213,15 +285,24 @@ $$
 
 ## Step 3: Aggregate Solution
 
-The value function $V(m,n)$ is determined by taking the maximum over the three regions:
+The value function $V(m, n)$ is determined by taking the maximum over the three regions:
 
 $$
 V(m, n) = \max\{v_{\text{int}}(m, n), v_{\text{dcon}}(m, n), v_{\text{con}}(m, n)\}
 $$
 
-The policy functions $(c, d)$ correspond to the region that achieves the maximum.
+The policy functions $(c, d)$ correspond to the region that achieves the maximum:
+- **Interior:** $d^* > -n$ satisfies first-order condition
+- **Pension-depleted:** $d^* = -n$ (withdraw all pension wealth)
+- **No contribution:** $d^* = 0$ (maintain current pension wealth)
 
-**Note:** These are not discrete choices with taste shocks - they are simply different regions of the constraint set. The discrete choice with taste shocks occurs at the post-decision level (work vs retire) in Step 0.
+**Implementation note:** Since the algorithm stores $\text{inv\_v} = -1/v$, the comparison for the maximum is done in inverse space:
+$$
+\arg\max_k v_k = \arg\max_k (-1/v_k)
+$$
+because if $v_1 > v_2 > 0$, then $-1/v_1 > -1/v_2$ (both negative, but $-1/v_1$ is "less negative").
+
+**Note:** These are not discrete choices with taste shocks - they are simply different regions of the pension contribution constraint set. The discrete choice with taste shocks occurs at the post-decision level (work vs retire) in Step 0.
 
 ## Step 4: Marginal Value Function
 
@@ -248,4 +329,41 @@ $$
 \end{cases}
 $$
 
+### Marginal Post-Decision Value
+
+In the limit, the probability-weighted derivative collapses to the discrete max:
+$$
+\lim_{\sigma \to 0} w_{a}(b^{\times}, a^{\times}) = \beta R_a \mathbb{E}_{y}\left[\max\left\{V_{m,\text{work},t+1}, V^{\text{ret}}_{m,t+1}\right\}\right]
+$$
+
+where the max is taken point-wise at each realization of $y_{t+1}$ inside the expectation.
+
 This recovers the standard NEGM algorithm with discrete work/retire choice.
+
+## Implementation Notes
+
+### Working with Inverse Values
+
+The code uses inverse values $\text{inv\_v} = -1/V$ for numerical stability. The key relationships are:
+
+1. Higher inverse value → Lower actual value (because of the negative sign and division)
+2. To get actual value: $V = -1/\text{inv\_v}$
+3. For marginal values: $V_m = 1/\text{inv\_vm}$ (positive inverse)
+
+### Numerical Stability in Logsumexp
+
+The implementation uses the log-sum-exp trick:
+$$
+\log\left(\sum_j \exp(x_j)\right) = x_{\max} + \log\left(\sum_j \exp(x_j - x_{\max})\right)
+$$
+
+This prevents overflow/underflow when computing the smooth max.
+
+### Monte Carlo Integration
+
+The expectation $\mathbb{E}_y$ is computed via Gaussian quadrature over the income shock distribution:
+$$
+\mathbb{E}_y[f(y)] \approx \sum_{i=1}^{N_\eta} w_{\eta,i} \cdot f(y_i)
+$$
+
+where $\{y_i, w_{\eta,i}\}$ are the quadrature nodes and weights.

@@ -1,0 +1,6 @@
+[submodule "consav"]
+	path = consav
+	url = https://github.com/NumEconCopenhagen/ConsumptionSaving.git
+[submodule "econmodel"]
+	path = econmodel
+	url = https://github.com/NumEconCopenhagen/EconModel.git
