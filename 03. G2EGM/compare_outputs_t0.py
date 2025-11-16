@@ -10,7 +10,7 @@ print("="*70)
 # Solve all three models
 results = {}
 
-for method in ['G2EGM', 'NEGM']:
+for method in ['G2EGM', 'NEGM', 'SEGM']:
     print(f"\nSolving {method}...")
     model = G2EGMModelClass(name=f'test_{method}', par={'solmethod': method, 'do_print': False})
     model.solve()

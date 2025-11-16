@@ -23,6 +23,7 @@ import last_period
 import post_decision
 import G2EGM
 import NEGM
+import SEGM
 import simulate
 
 class G2EGMModelClass(ModelClass):
@@ -171,6 +172,10 @@ class G2EGMModelClass(ModelClass):
         elif par.solmethod == 'NEGM':
 
             par.grid_l = par.grid_m
+            
+        elif par.solmethod == 'SEGM':
+            
+            par.grid_l = par.grid_m  # SEGM reuses NEGM's pure_c which needs grid_l
 
         # e. shocks
         assert (par.Neta == 1 and par.var_eta == 0) or (par.Neta > 1 and par.var_eta > 0)
@@ -194,6 +199,8 @@ class G2EGMModelClass(ModelClass):
             self.solve_G2EGM()
         elif self.par.solmethod == 'NEGM':
             self.solve_NEGM()
+        elif self.par.solmethod == 'SEGM':
+            self.solve_SEGM()
 
     def precompile_numba(self):
         """ solve the model with very coarse grids"""
@@ -284,6 +291,24 @@ class G2EGMModelClass(ModelClass):
             
             sol.c_pure_c = np.zeros((par.T,par.Nb_pd,par.Nm))
             sol.inv_v_pure_c = np.zeros((par.T,par.Nb_pd,par.Nm))
+            
+        elif par.solmethod == 'SEGM':
+
+            sol.c = np.zeros((par.T,par.Nn,par.Nm))
+            sol.d = np.zeros((par.T,par.Nn,par.Nm))
+            sol.inv_v = np.zeros((par.T,par.Nn,par.Nm))
+            sol.inv_vn = np.zeros((par.T,par.Nn,par.Nm))  # Needed for post_decision with G2EGM=True
+            sol.inv_vm = np.zeros((par.T,par.Nn,par.Nm))
+
+            sol.w = np.zeros((par.T-1,par.Nb_pd,par.Na_pd))
+            sol.wa = np.zeros((par.T-1,par.Nb_pd,par.Na_pd))
+            sol.wb = np.zeros((par.T-1,par.Nb_pd,par.Na_pd))  # SEGM needs wb (computed by post_decision)
+            
+            # Intermediate arrays for pure consumption solution (like NEGM)
+            sol.c_pure_c = np.zeros((par.T,par.Nb_pd,par.Nm))
+            sol.inv_v_pure_c = np.zeros((par.T,par.Nb_pd,par.Nm))  # Needed by NEGM.solve_pure_c
+            sol.v_pure_c_l = np.zeros((par.T,par.Nb_pd,par.Nm))  # Marginal value w.r.t. l
+            sol.v_pure_c_b = np.zeros((par.T,par.Nb_pd,par.Nm))  # Marginal value w.r.t. b
             
     def solve_G2EGM(self):
         """ solve with G2EGM """
@@ -404,6 +429,64 @@ class G2EGMModelClass(ModelClass):
                 par.time_vfi[t] = time.time()-t0_vfi
                 if par.do_print:
                     print(f'   solved outer problem in {par.time_vfi[t] :.2f} secs')
+
+                par.time_work[t] = time.time()-t0
+
+            if par.do_print:
+                print(f'solved working problem in {np.sum(par.time_work):.2f} secs')
+
+    def solve_SEGM(self):
+        """ solve with SEGM (Sequential EGM) """
+        
+        with jit(self) as model:
+
+            par = model.par
+            sol = model.sol
+
+            if par.do_print:
+                print('Solving with SEGM:')
+
+            # a. solve retirement
+            t0 = time.time()
+
+            retirement.solve(sol,par,G2EGM=True)  # SEGM needs inv_vn_ret for post_decision
+
+            if par.do_print:
+                print(f'solved retirement problem in {time.time()-t0:.2f} secs')
+
+            # b. solve last period working
+            t0 = time.time()
+
+            last_period.solve(sol,par,G2EGM=True)  # Set G2EGM=True to compute inv_vn for post_decision
+
+            if par.do_print:
+                print(f'solved last period working in {time.time()-t0:.2f} secs')
+
+            # c. solve working  
+            for t in reversed(range(par.T-1)):
+                
+                t0 = time.time()   
+                
+                if par.do_print:
+                    print(f' t = {t}:')
+                
+                # i. post decision (SEGM needs wb - use G2EGM=True to compute it analytically)
+                t0_w = time.time()
+
+                post_decision.compute(t,sol,par,G2EGM=True)  # This computes wb properly like G2EGM
+
+                par.time_w[t] = time.time() - t0_w
+                if par.do_print:
+                    print(f'   computed post decision value function in {par.time_w[t]:.2f} secs')
+
+                # ii. SEGM
+                t0_segm = time.time()
+                
+                SEGM.solve(t,sol,par)
+                
+                par.time_egm[t] = time.time()-t0_segm
+                if par.do_print:
+                    print(f'   applied SEGM in {par.time_egm[t]:.2f} secs')
 
                 par.time_work[t] = time.time()-t0
 
