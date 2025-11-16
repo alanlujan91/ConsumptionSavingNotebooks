@@ -20,7 +20,7 @@ import NEGM  # Reuse NEGM's pure consumption solver
 
 @njit
 def upperenvelope_2d_segm(n_endo_2d, m_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
-                          grid_n, grid_m, c_out, d_out, v_out, par):
+                          grid_n, grid_m, c_out, d_out, v_out, w, par):
     """
     Robust 2D upper envelope for SEGM (matches quality of upperenvelope.py)
     
@@ -77,16 +77,16 @@ def upperenvelope_2d_segm(n_endo_2d, m_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
             # Two triangles per grid cell
             for tri in range(2):
                 _process_triangle(i_l, i_b, tri, 
-                                 m_endo_2d, n_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
-                                 Nl, Nb, valid, grid_n, grid_m,
-                                 c_out, d_out, v_out, holes, par)
+                                  m_endo_2d, n_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
+                                  Nl, Nb, valid, grid_n, grid_m,
+                                  c_out, d_out, v_out, holes, w, par)
     
     # Fill holes (grid points not covered by any triangle)
     _fill_holes(c_out, d_out, v_out, holes, grid_n, grid_m)
 
 @njit
 def _process_triangle(i_l, i_b, tri, m, n, c, d, v, Nl, Nb, valid,
-                     grid_n, grid_m, c_out, d_out, v_out, holes, par):
+                      grid_n, grid_m, c_out, d_out, v_out, holes, w, par):
     """Process one triangle (matches upperenvelope.py logic)"""
     
     # a. Define simplex in (b, l) space
@@ -166,12 +166,17 @@ def _process_triangle(i_l, i_b, tri, m, n, c, d, v, Nl, Nb, valid,
             c_interp = w1 * c[i_b_1, i_l_1] + w2 * c[i_b_2, i_l_2] + w3 * c[i_b_3, i_l_3]
             d_interp = w1 * d[i_b_1, i_l_1] + w2 * d[i_b_2, i_l_2] + w3 * d[i_b_3, i_l_3]
             
+            # Compute implied post-decision states
+            a_interp = m_now - c_interp - d_interp
+            b_interp = n_now + d_interp + pens.func(d_interp, par)
+            
             # Feasibility checks
-            if c_interp <= 0.0 or d_interp < 0.0:
+            if c_interp <= 0.0 or d_interp < 0.0 or a_interp < 0.0 or b_interp < 0.0:
                 continue
             
-            # Value interpolation
-            v_interp = w1 * v[i_b_1, i_l_1] + w2 * v[i_b_2, i_l_2] + w3 * v[i_b_3, i_l_3]
+            # Recompute value (like G2EGM does) for consistency
+            w_interp = linear_interp.interp_2d(par.grid_b_pd, par.grid_a_pd, w, b_interp, a_interp)
+            v_interp = utility.func(c_interp, par) + pens.func(d_interp, par) + w_interp
             
             # Upper envelope: update if better
             if v_interp > v_out[i_n, i_m]:
@@ -288,9 +293,9 @@ def solve(t, sol, par):
     # It computes c(b, l) where l = liquid resources = a + c
     NEGM.solve_pure_c(t, sol, par)
     
-    # Now compute marginal values using envelope theorem
-    # v_l(b, l) = u'(c*(b, l)) - marginal utility of consumption
-    # v_b(b, l) = wb(b, a*) where a* = l - c*(b, l)
+    # Envelope theorem: SEGM uses same FOCs as G2EGM, just sequentially!
+    # After solving consumption, we have v_l = wa and v_b = wb at optimal a* = l - c*
+    # The pension FOC is: ψ'(d) = v_l/v_b - 1 = wa/wb - 1 (same as G2EGM!)
     for i_b in range(par.Nb_pd):
         b_val = par.grid_b_pd[i_b]
         for i_l in range(par.Nm):
@@ -304,14 +309,12 @@ def solve(t, sol, par):
                 v_b[i_b, i_l] = 1e-6
                 continue
             
-            # v_l = u'(c) - marginal utility w.r.t. liquid resources (same as u'(c))
-            v_l[i_b, i_l] = utility.marg_func(c_opt, par)
-            
-            # v_b = wb(b, a*) - interpolate from post-decision marginal value
+            # By envelope: v_l = wa(b, a*) and v_b = wb(b, a*) at optimal a*
             a_clamped = max(par.grid_a_pd[0], min(par.grid_a_pd[-1], a_opt))
+            v_l[i_b, i_l] = linear_interp.interp_2d(par.grid_b_pd, par.grid_a_pd, wa, b_val, a_clamped)
             v_b[i_b, i_l] = linear_interp.interp_2d(par.grid_b_pd, par.grid_a_pd, wb, b_val, a_clamped)
             
-            # Ensure positive
+            # Ensure positive  
             if v_l[i_b, i_l] < 1e-10:
                 v_l[i_b, i_l] = 1e10
             if v_b[i_b, i_l] < 1e-10:
@@ -354,9 +357,10 @@ def solve(t, sol, par):
             if c_val <= 1e-8:
                 continue
             
-            # Invert pension FOC: ψ'(d) = v_l - v_b
-            # For ψ(d) = χ log(1 + d): χ/(1+d) = v_l - v_b
-            # Rearranging: d = χ/(v_l - v_b) - 1
+            # Invert pension FOC: ψ'(d) = (v_l - v_b)/v_b
+            # For ψ(d) = χ log(1 + d): χ/(1+d) = (v_l - v_b)/v_b
+            # Rearranging: χ v_b/(v_l - v_b) = 1 + d
+            # Therefore: d = (χ v_b)/(v_l - v_b) - 1
             
             denom = v_l_val - v_b_val
             
@@ -365,7 +369,7 @@ def solve(t, sol, par):
             v_best = -np.inf
             
             if denom > 1e-6 and v_b_val > 1e-10:
-                d_test = par.chi / denom - 1.0
+                d_test = (par.chi * v_b_val) / denom - 1.0
                 
                 if d_test > 0:
                     d_test = min(d_test, b_val, l_val)
@@ -420,13 +424,27 @@ def solve(t, sol, par):
     # Regrid using SEGM's custom 2D upper envelope
     # =========================================================================
     
+    # Diagnostic: count valid endogenous points
+    valid_count = 0
+    d_positive_count = 0
+    for i_b in range(Nb):
+        for i_l in range(Nl):
+            if not np.isnan(d_endo_2d[i_b, i_l]) and not np.isinf(v_endo_2d[i_b, i_l]):
+                valid_count += 1
+                if d_endo_2d[i_b, i_l] > 0.01:
+                    d_positive_count += 1
+    
+    # If too few valid points, skip regridding (will use defaults)
+    if valid_count < 100:
+        return
+    
     c_out = sol.c[t]
     d_out = sol.d[t]
     v_out = np.zeros((par.Nn, par.Nm))
     
     upperenvelope_2d_segm(
         n_endo_2d, m_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
-        par.grid_n, par.grid_m, c_out, d_out, v_out, par
+        par.grid_n, par.grid_m, c_out, d_out, v_out, w, par
     )
     
     # Convert to inverse value and compute marginals
