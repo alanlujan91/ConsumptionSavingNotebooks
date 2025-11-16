@@ -51,6 +51,27 @@ except Exception as e:
     import traceback
     traceback.print_exc()
 
+# SEGM
+print("\nSolving SEGM...")
+model_segm = G2EGMModelClass(name='SEGM', par={'solmethod': 'SEGM', 'T': 20})
+try:
+    model_segm.solve()
+    model_segm.calculate_euler()
+    
+    euler_segm = model_segm.sim.euler
+    
+    print(f"✓ SEGM solved and Euler errors computed")
+    print(f"  Mean Euler error:   {np.nanmean(euler_segm):8.3f}")
+    print(f"  Median Euler error: {np.nanmedian(euler_segm):8.3f}")
+    print(f"  Max Euler error:    {np.nanmax(euler_segm):8.3f}")
+    print(f"  P5 Euler error:     {np.nanpercentile(euler_segm, 5):8.3f}")
+    print(f"  P95 Euler error:    {np.nanpercentile(euler_segm, 95):8.3f}")
+    print(f"  Non-NaN points:     {np.sum(~np.isnan(euler_segm))}")
+except Exception as e:
+    print(f"✗ SEGM failed: {e}")
+    import traceback
+    traceback.print_exc()
+
 print("\n" + "="*70)
 print("NOTE: Euler errors in log10 scale")
 print("  -3 = 0.1% error, -4 = 0.01% error, -5 = 0.001% error")

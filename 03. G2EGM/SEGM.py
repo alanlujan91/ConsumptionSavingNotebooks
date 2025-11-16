@@ -20,36 +20,44 @@ import NEGM  # Reuse NEGM's pure consumption solver
 
 @njit
 def upperenvelope_2d_segm(n_endo_2d, m_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
-                          grid_n, grid_m, c_out, d_out, v_out):
+                          grid_n, grid_m, c_out, d_out, v_out, par):
     """
-    2D upper envelope for SEGM - triangulation with barycentric interpolation
+    Robust 2D upper envelope for SEGM (matches quality of upperenvelope.py)
+    
+    Given endogenous grids from pension EGM, regrid to common (n, m) grid.
+    Key difference from G2EGM: c is predetermined, only choose best d.
     
     Args:
         n_endo_2d, m_endo_2d: endogenous states [Nb, Nl]
         c_endo_2d, d_endo_2d, v_endo_2d: policies and values [Nb, Nl]
         grid_n, grid_m: target exogenous grids
         c_out, d_out, v_out: output arrays [Nn, Nm]
+        par: parameters (for extrapolation control)
     """
     Nb, Nl = n_endo_2d.shape
     Nn = len(grid_n)
     Nm = len(grid_m)
     
-    # Initialize outputs
+    # Initialize outputs (use safe defaults for unfilled regions)
     for i_n in range(Nn):
         for i_m in range(Nm):
             c_out[i_n, i_m] = 0.0
             d_out[i_n, i_m] = 0.0
             v_out[i_n, i_m] = -np.inf
     
-    # Mark valid points
+    # Rigorous validation (matches upperenvelope.py)
     valid = np.ones((Nb, Nl), dtype=np.bool_)
     for i_b in range(Nb):
         for i_l in range(Nl):
-            valid[i_b, i_l] = (not np.isnan(v_endo_2d[i_b, i_l]) and
-                              not np.isinf(v_endo_2d[i_b, i_l]) and
-                              c_endo_2d[i_b, i_l] > 1e-8 and
-                              m_endo_2d[i_b, i_l] > -0.1 and
-                              n_endo_2d[i_b, i_l] > -0.1)
+            valid[i_b, i_l] &= np.imag(c_endo_2d[i_b, i_l]) == 0
+            valid[i_b, i_l] &= np.imag(d_endo_2d[i_b, i_l]) == 0
+            valid[i_b, i_l] &= ~np.isnan(v_endo_2d[i_b, i_l])
+            valid[i_b, i_l] &= c_endo_2d[i_b, i_l] >= -0.5
+            valid[i_b, i_l] &= d_endo_2d[i_b, i_l] >= -0.5
+            valid[i_b, i_l] &= m_endo_2d[i_b, i_l] > -0.1
+            valid[i_b, i_l] &= n_endo_2d[i_b, i_l] > -0.1
+            valid[i_b, i_l] &= m_endo_2d[i_b, i_l] < par.m_max + 1
+            valid[i_b, i_l] &= n_endo_2d[i_b, i_l] < par.n_max + 1
     
     valid_count = 0
     for i_b in range(Nb):
@@ -60,6 +68,9 @@ def upperenvelope_2d_segm(n_endo_2d, m_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
     if valid_count < 100:
         return
     
+    # Track holes for filling (like upperenvelope.py)
+    holes = np.ones((Nn, Nm))
+    
     # Form triangles and interpolate
     for i_b in range(Nb):
         for i_l in range(Nl):
@@ -68,145 +79,186 @@ def upperenvelope_2d_segm(n_endo_2d, m_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
                 _process_triangle(i_l, i_b, tri, 
                                  m_endo_2d, n_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
                                  Nl, Nb, valid, grid_n, grid_m,
-                                 c_out, d_out, v_out)
+                                 c_out, d_out, v_out, holes, par)
     
     # Fill holes (grid points not covered by any triangle)
-    _fill_holes(c_out, d_out, v_out, grid_n, grid_m)
+    _fill_holes(c_out, d_out, v_out, holes, grid_n, grid_m)
 
 @njit
 def _process_triangle(i_l, i_b, tri, m, n, c, d, v, Nl, Nb, valid,
-                     grid_n, grid_m, c_out, d_out, v_out):
-    """Process one triangle for upper envelope"""
+                     grid_n, grid_m, c_out, d_out, v_out, holes, par):
+    """Process one triangle (matches upperenvelope.py logic)"""
     
-    # Define triangle vertices
+    # a. Define simplex in (b, l) space
     i_b_1, i_l_1 = i_b, i_l
     
-    if i_b == Nb-1:
+    if i_b == Nb - 1:
         return
-    i_b_2, i_l_2 = i_b+1, i_l
+    i_b_2, i_l_2 = i_b + 1, i_l
+    
+    i_b_3, i_l_3 = -1, -1
     
     if tri == 0:
-        if i_l == 0 or i_b == Nb-1:
+        if i_l == 0 or i_b == Nb - 1:
             return
-        i_b_3, i_l_3 = i_b+1, i_l-1
+        i_b_3, i_l_3 = i_b + 1, i_l - 1
     else:
-        if i_l == Nl-1:
+        if i_l == Nl - 1:
             return
-        i_b_3, i_l_3 = i_b, i_l+1
+        i_b_3, i_l_3 = i_b, i_l + 1
     
-    # Check validity
     if not (valid[i_b_1, i_l_1] and valid[i_b_2, i_l_2] and valid[i_b_3, i_l_3]):
         return
     
-    # Get triangle vertices in (m, n) space
-    m1, m2, m3 = m[i_b_1, i_l_1], m[i_b_2, i_l_2], m[i_b_3, i_l_3]
-    n1, n2, n3 = n[i_b_1, i_l_1], n[i_b_2, i_l_2], n[i_b_3, i_l_3]
+    # b. Simplex in (m, n) space
+    m1 = m[i_b_1, i_l_1]
+    m2 = m[i_b_2, i_l_2]
+    m3 = m[i_b_3, i_l_3]
     
-    # Bounding box
-    m_min = min(m1, min(m2, m3))
-    m_max = max(m1, max(m2, m3))
-    n_min = min(n1, min(n2, n3))
-    n_max = max(n1, max(n2, n3))
+    n1 = n[i_b_1, i_l_1]
+    n2 = n[i_b_2, i_l_2]
+    n3 = n[i_b_3, i_l_3]
     
-    # Find grid indices using manual search
+    # c. Bounding box with binary search (like upperenvelope.py)
+    m_max = np.fmax(m1, np.fmax(m2, m3))
+    m_min = np.fmin(m1, np.fmin(m2, m3))
+    n_max = np.fmax(n1, np.fmax(n2, n3))
+    n_min = np.fmin(n1, np.fmin(n2, n3))
+    
     im_low = 0
-    for i in range(len(grid_m)):
-        if grid_m[i] >= m_min:
-            im_low = i
-            break
-    
-    im_high = len(grid_m)
-    for i in range(len(grid_m)-1, -1, -1):
-        if grid_m[i] <= m_max:
-            im_high = i + 1
-            break
+    if m_min >= 0:
+        im_low = linear_interp.binary_search(0, len(grid_m), grid_m, m_min)
+    im_high = linear_interp.binary_search(0, len(grid_m), grid_m, m_max) + 1
     
     in_low = 0
-    for i in range(len(grid_n)):
-        if grid_n[i] >= n_min:
-            in_low = i
-            break
+    if n_min >= 0:
+        in_low = linear_interp.binary_search(0, len(grid_n), grid_n, n_min)
+    in_high = linear_interp.binary_search(0, len(grid_n), grid_n, n_max) + 1
     
-    in_high = len(grid_n)
-    for i in range(len(grid_n)-1, -1, -1):
-        if grid_n[i] <= n_max:
-            in_high = i + 1
-            break
+    # Extrapolation control (like upperenvelope.py)
+    im_low = max(im_low - par.egm_extrap_add, 0)
+    im_high = min(im_high + par.egm_extrap_add, len(grid_m))
+    in_low = max(in_low - par.egm_extrap_add, 0)
+    in_high = min(in_high + par.egm_extrap_add, len(grid_n))
     
-    im_low = max(0, im_low)
-    im_high = min(len(grid_m), im_high)
-    in_low = max(0, in_low)
-    in_high = min(len(grid_n), in_high)
-    
-    # Barycentric interpolation denominator
-    denom = (n2-n3)*(m1-m3) + (m3-m2)*(n1-n3)
+    # d. Barycentric interpolation
+    denom = (n2 - n3) * (m1 - m3) + (m3 - m2) * (n1 - n3)
     if abs(denom) < 1e-10:
         return
     
-    # Loop through grid points in bounding box
+    # e. Loop through target grid
     for i_n in range(in_low, in_high):
-        n_val = grid_n[i_n]
         for i_m in range(im_low, im_high):
-            m_val = grid_m[i_m]
+            
+            m_now = grid_m[i_m]
+            n_now = grid_n[i_n]
             
             # Barycentric coordinates
-            w1 = ((n2-n3)*(m_val-m3) + (m3-m2)*(n_val-n3)) / denom
-            w2 = ((n3-n1)*(m_val-m3) + (m1-m3)*(n_val-n3)) / denom
+            w1 = ((n2 - n3) * (m_now - m3) + (m3 - m2) * (n_now - n3)) / denom
+            w2 = ((n3 - n1) * (m_now - m3) + (m1 - m3) * (n_now - n3)) / denom
             w3 = 1.0 - w1 - w2
             
-            # Check if point is inside triangle (with small tolerance)
-            if w1 >= -1e-8 and w2 >= -1e-8 and w3 >= -1e-8:
-                # Interpolate values
-                c_val = w1*c[i_b_1, i_l_1] + w2*c[i_b_2, i_l_2] + w3*c[i_b_3, i_l_3]
-                d_val = w1*d[i_b_1, i_l_1] + w2*d[i_b_2, i_l_2] + w3*d[i_b_3, i_l_3]
-                v_val = w1*v[i_b_1, i_l_1] + w2*v[i_b_2, i_l_2] + w3*v[i_b_3, i_l_3]
-                
-                # Upper envelope: keep if higher value
-                if v_val > v_out[i_n, i_m]:
-                    c_out[i_n, i_m] = c_val
-                    d_out[i_n, i_m] = d_val
-                    v_out[i_n, i_m] = v_val
+            # Extrapolation control (like upperenvelope.py)
+            if w1 < par.egm_extrap_w or w2 < par.egm_extrap_w or w3 < par.egm_extrap_w:
+                continue
+            
+            # Interpolate choices - SEGM: c predetermined, d varies
+            c_interp = w1 * c[i_b_1, i_l_1] + w2 * c[i_b_2, i_l_2] + w3 * c[i_b_3, i_l_3]
+            d_interp = w1 * d[i_b_1, i_l_1] + w2 * d[i_b_2, i_l_2] + w3 * d[i_b_3, i_l_3]
+            
+            # Feasibility checks
+            if c_interp <= 0.0 or d_interp < 0.0:
+                continue
+            
+            # Value interpolation
+            v_interp = w1 * v[i_b_1, i_l_1] + w2 * v[i_b_2, i_l_2] + w3 * v[i_b_3, i_l_3]
+            
+            # Upper envelope: update if better
+            if v_interp > v_out[i_n, i_m]:
+                v_out[i_n, i_m] = v_interp
+                c_out[i_n, i_m] = c_interp
+                d_out[i_n, i_m] = d_interp
+                holes[i_n, i_m] = 0
 
 @njit
-def _fill_holes(c_out, d_out, v_out, grid_n, grid_m):
-    """Fill holes (grid points not covered by triangulation) using nearest neighbor"""
-    Nn, Nm = c_out.shape
+def _fill_holes(c_out, d_out, v_out, holes, grid_n, grid_m):
+    """Fill holes using nearby valid points (matches upperenvelope.py logic)"""
+    
+    Nn = len(grid_n)
+    Nm = len(grid_m)
+    
+    # a. Locate global bounding box with content
+    i_n_min = 0
+    i_n_max = Nn - 1
+    min_n = np.inf
+    max_n = -np.inf
+    
+    i_m_min = 0
+    i_m_max = Nm - 1
+    min_m = np.inf
+    max_m = -np.inf
     
     for i_n in range(Nn):
         for i_m in range(Nm):
-            if np.isnan(c_out[i_n, i_m]) or np.isinf(v_out[i_n, i_m]) or v_out[i_n, i_m] >= -1e-10:
-                # Find nearest valid neighbor (expanded search radius)
-                best_dist = np.inf
-                best_c = grid_m[i_m]  # Default: consume all resources
-                best_d = 0.0           # Default: no pension
-                best_v = -1e10
-                
-                # Expand search radius
-                for radius in range(1, min(20, max(Nn, Nm))):
-                    i_n_min = max(0, i_n-radius)
-                    i_n_max = min(Nn, i_n+radius+1)
-                    i_m_min = max(0, i_m-radius)
-                    i_m_max = min(Nm, i_m+radius+1)
+            
+            m_now = grid_m[i_m]
+            n_now = grid_n[i_n]
+            
+            if holes[i_n, i_m] == 1:
+                continue
+            
+            if m_now < min_m:
+                min_m = m_now
+                i_m_min = i_m
+            
+            if m_now > max_m:
+                max_m = m_now
+                i_m_max = i_m
+            
+            if n_now < min_n:
+                min_n = n_now
+                i_n_min = i_n
+            
+            if n_now > max_n:
+                max_n = n_now
+                i_n_max = i_n
+    
+    # b. Fill holes within bounding box
+    i_n_max = min(i_n_max + 1, Nn)
+    i_m_max = min(i_m_max + 1, Nm)
+    
+    for i_n in range(i_n_min, i_n_max):
+        for i_m in range(i_m_min, i_m_max):
+            
+            if holes[i_n, i_m] == 0:  # Not a hole
+                continue
+            
+            # Search window
+            m_add = 2
+            n_add = 2
+            
+            i_n_close_min = max(0, i_n - n_add)
+            i_n_close_max = min(i_n + n_add + 1, Nn)
+            i_m_close_min = max(0, i_m - m_add)
+            i_m_close_max = min(i_m + m_add + 1, Nm)
+            
+            # Find best nearby point
+            for i_n_close in range(i_n_close_min, i_n_close_max):
+                for i_m_close in range(i_m_close_min, i_m_close_max):
                     
-                    for j_n in range(i_n_min, i_n_max):
-                        for j_m in range(i_m_min, i_m_max):
-                            if (not np.isnan(c_out[j_n, j_m]) and 
-                                not np.isinf(v_out[j_n, j_m]) and 
-                                v_out[j_n, j_m] < -1e-10):
-                                dist = (grid_n[i_n] - grid_n[j_n])**2 + (grid_m[i_m] - grid_m[j_m])**2
-                                if dist < best_dist:
-                                    best_dist = dist
-                                    best_c = c_out[j_n, j_m]
-                                    best_d = d_out[j_n, j_m]
-                                    best_v = v_out[j_n, j_m]
+                    if holes[i_n_close, i_m_close] == 1:  # Also a hole
+                        continue
                     
-                    # If found a valid neighbor, stop searching
-                    if best_dist < np.inf:
-                        break
-                
-                c_out[i_n, i_m] = best_c
-                d_out[i_n, i_m] = best_d
-                v_out[i_n, i_m] = best_v
+                    # Copy policy from nearby valid point
+                    c_interp = c_out[i_n_close, i_m_close]
+                    d_interp = d_out[i_n_close, i_m_close]
+                    v_interp = v_out[i_n_close, i_m_close]
+                    
+                    # Update if better
+                    if v_interp > v_out[i_n, i_m]:
+                        v_out[i_n, i_m] = v_interp
+                        c_out[i_n, i_m] = c_interp
+                        d_out[i_n, i_m] = d_interp
 
 @njit
 def solve(t, sol, par):
@@ -374,7 +426,7 @@ def solve(t, sol, par):
     
     upperenvelope_2d_segm(
         n_endo_2d, m_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
-        par.grid_n, par.grid_m, c_out, d_out, v_out
+        par.grid_n, par.grid_m, c_out, d_out, v_out, par
     )
     
     # Convert to inverse value and compute marginals
