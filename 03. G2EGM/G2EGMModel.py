@@ -176,7 +176,9 @@ class G2EGMModelClass(ModelClass):
             
         elif par.solmethod == 'SEGM':
             
-            par.grid_l = par.grid_m  # SEGM reuses NEGM's pure_c which needs grid_l
+            # Keep grid_l = grid_m for simplicity
+            # Endogenous m may exceed m_max, but upper envelope handles extrapolation
+            par.grid_l = par.grid_m
 
         # e. shocks
         assert (par.Neta == 1 and par.var_eta == 0) or (par.Neta > 1 and par.var_eta > 0)
@@ -305,7 +307,7 @@ class G2EGMModelClass(ModelClass):
             sol.wa = np.zeros((par.T-1,par.Nb_pd,par.Na_pd))
             sol.wb = np.zeros((par.T-1,par.Nb_pd,par.Na_pd))  # SEGM needs wb (computed by post_decision)
             
-            # Intermediate arrays for pure consumption solution (like NEGM)
+            # Intermediate arrays for pure consumption solution (like NEGM)  
             sol.c_pure_c = np.zeros((par.T,par.Nb_pd,par.Nm))
             sol.inv_v_pure_c = np.zeros((par.T,par.Nb_pd,par.Nm))  # Needed by NEGM.solve_pure_c
             sol.v_pure_c_l = np.zeros((par.T,par.Nb_pd,par.Nm))  # Marginal value w.r.t. l

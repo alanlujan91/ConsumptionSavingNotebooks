@@ -300,7 +300,7 @@ def solve(t, sol, par):
         b_val = par.grid_b_pd[i_b]
         for i_l in range(par.Nm):
             c_opt = c_pure_c[i_b, i_l]
-            l_val = par.grid_m[i_l]  # NEGM outputs on grid_l which equals grid_m
+            l_val = par.grid_m[i_l]  # grid_l = grid_m
             a_opt = l_val - c_opt
             
             # Safety checks
@@ -324,9 +324,9 @@ def solve(t, sol, par):
     # SUBPROBLEM 2: Pure Pension EGM (b, l) → (n, m)
     # =========================================================================
     
-    # Build endogenous grid in 2D structure
+    # Build endogenous grid in 2D structure for upper envelope
     Nb = par.Nb_pd
-    Nl = par.Nm
+    Nl = par.Nm  # grid_l = grid_m
     
     d_endo_2d = np.zeros((Nb, Nl))
     c_endo_2d = np.zeros((Nb, Nl))
@@ -347,7 +347,7 @@ def solve(t, sol, par):
         b_val = par.grid_b_pd[i_b]
         
         for i_l in range(Nl):
-            l_val = par.grid_m[i_l]
+            l_val = par.grid_m[i_l]  # grid_l = grid_m
             
             c_val = c_pure_c[i_b, i_l]
             v_l_val = v_l[i_b, i_l]
