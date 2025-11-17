@@ -62,6 +62,7 @@ class G2EGMModelClass(ModelClass):
         par.beta = 0.98
         par.rho = 2.0
         par.alpha = 0.25
+        par.sigma = 0.0  # taste shock std dev (0 = no taste shocks, >0 = smooth choice)
 
         # returns and income
         par.yret = 0.5

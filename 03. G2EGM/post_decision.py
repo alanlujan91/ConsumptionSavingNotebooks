@@ -5,6 +5,68 @@ from numba import njit
 from consav import linear_interp # for linear interpolation
 
 @njit
+def logsumexp(v1, v2, sigma):
+    """
+    Compute log(exp(v1/sigma) + exp(v2/sigma)) * sigma using numerically stable formula.
+    
+    When sigma → 0, this approaches max(v1, v2).
+    When sigma → ∞, this approaches (v1 + v2)/2 + sigma*log(2).
+    
+    Args:
+        v1, v2: values to compare (can be negative utility values)
+        sigma: taste shock standard deviation (> 0)
+    
+    Returns:
+        Smoothed maximum value
+    """
+    if sigma < 1e-10:
+        # No taste shocks, return hard max
+        return np.maximum(v1, v2)
+    
+    # Numerically stable logsumexp
+    v_max = np.maximum(v1, v2)
+    return v_max + sigma * np.log(np.exp((v1 - v_max) / sigma) + np.exp((v2 - v_max) / sigma))
+
+@njit
+def choice_prob(v_chosen, v_other, sigma):
+    """
+    Compute probability of choosing option with value v_chosen over v_other.
+    
+    Uses logit formula: P = exp(v_chosen/sigma) / (exp(v_chosen/sigma) + exp(v_other/sigma))
+    
+    When sigma → 0, this approaches 1 if v_chosen > v_other, 0.5 if equal, 0 otherwise.
+    When sigma → ∞, this approaches 0.5 (random choice).
+    
+    Args:
+        v_chosen: value of chosen option
+        v_other: value of other option  
+        sigma: taste shock standard deviation (> 0)
+    
+    Returns:
+        Choice probability in [0, 1]
+    """
+    if sigma < 1e-10:
+        # No taste shocks, return hard choice
+        if v_chosen > v_other:
+            return 1.0
+        elif v_chosen < v_other:
+            return 0.0
+        else:
+            return 0.5
+    
+    # Numerically stable logit
+    diff = (v_chosen - v_other) / sigma
+    
+    # Avoid overflow: if diff is very large, probability ≈ 1
+    if diff > 50:
+        return 1.0
+    elif diff < -50:
+        return 0.0
+    
+    exp_diff = np.exp(diff)
+    return exp_diff / (1.0 + exp_diff)
+
+@njit
 def compute(t,sol,par,G2EGM=True):
 
     # unpack
@@ -62,16 +124,40 @@ def compute(t,sol,par,G2EGM=True):
             # iv. accumulate
             for i_a in range(par.Na_pd):
 
-                if inv_v_ret_plus[i_a] > inv_v_plus[i_a]:
-                    w_now = -1.0/inv_v_ret_plus[i_a]
-                    wa_now = 1.0/inv_vm_ret_plus[i_a]
-                    if G2EGM:
-                        wb_now = 1.0/inv_vn_ret_plus[i_a]
+                # Convert inverse values to values (inv_v = -1/v for negative v)
+                v_work = -1.0 / inv_v_plus[i_a]
+                v_ret = -1.0 / inv_v_ret_plus[i_a]
+                
+                # Use taste shocks if sigma > 0
+                if par.sigma < 1e-10:
+                    # No taste shocks: use hard max (original behavior)
+                    if inv_v_ret_plus[i_a] > inv_v_plus[i_a]:
+                        w_now = v_ret
+                        wa_now = 1.0/inv_vm_ret_plus[i_a]
+                        if G2EGM:
+                            wb_now = 1.0/inv_vn_ret_plus[i_a]
+                    else:
+                        w_now = v_work
+                        wa_now = 1.0/inv_vm_plus[i_a]
+                        if G2EGM:
+                            wb_now = 1.0/inv_vn_plus[i_a]
                 else:
-                    w_now = -1.0/inv_v_plus[i_a]
-                    wa_now = 1.0/inv_vm_plus[i_a]
+                    # Taste shocks: use smooth max and probability-weighted marginals
+                    w_now = logsumexp(v_work, v_ret, par.sigma)
+                    
+                    # Compute choice probabilities
+                    prob_work = choice_prob(v_work, v_ret, par.sigma)
+                    prob_ret = 1.0 - prob_work
+                    
+                    # Weight marginal values by choice probabilities
+                    wa_work = 1.0/inv_vm_plus[i_a]
+                    wa_ret = 1.0/inv_vm_ret_plus[i_a]
+                    wa_now = prob_work * wa_work + prob_ret * wa_ret
+                    
                     if G2EGM:
-                        wb_now = 1.0/inv_vn_plus[i_a]
+                        wb_work = 1.0/inv_vn_plus[i_a]
+                        wb_ret = 1.0/inv_vn_ret_plus[i_a]
+                        wb_now = prob_work * wb_work + prob_ret * wb_ret
                 
                 w[i_b,i_a] += par.w_eta[i_eta]*par.beta*w_now
                 wa[i_b,i_a] += par.w_eta[i_eta]*par.Ra*par.beta*wa_now
