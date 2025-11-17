@@ -55,8 +55,8 @@ def upperenvelope_2d_segm(n_endo_2d, m_endo_2d, c_endo_2d, d_endo_2d, v_endo_2d,
             valid[i_b, i_l] &= c_endo_2d[i_b, i_l] >= -0.5
             valid[i_b, i_l] &= d_endo_2d[i_b, i_l] >= -0.5
             valid[i_b, i_l] &= m_endo_2d[i_b, i_l] > -0.1
-            valid[i_b, i_l] &= n_endo_2d[i_b, i_l] > -0.1
-            valid[i_b, i_l] &= m_endo_2d[i_b, i_l] < par.m_max + 1
+            valid[i_b, i_l] &= n_endo_2d[i_b, i_l] > -0.2  # Allow slightly negative n (will be clamped)
+            valid[i_b, i_l] &= m_endo_2d[i_b, i_l] < par.m_max + 3  # Allow more headroom for l+d
             valid[i_b, i_l] &= n_endo_2d[i_b, i_l] < par.n_max + 1
     
     valid_count = 0
@@ -380,12 +380,16 @@ def solve(t, sol, par):
                     m_test = l_val + d_test
                     a_test = m_test - c_val
                     
-                    # Check validity
-                    if (a_test >= par.grid_a_pd[0] and a_test <= par.grid_a_pd[-1] and
-                        n_test >= 0 and n_test >= par.grid_n[0] and m_test >= par.grid_m[0]):
+                    # Check validity (relaxed constraints for boundary extrapolation)
+                    n_test_clamped = max(n_test, 0.0)  # Allow slight negative n, clamp to 0
+                    if (n_test_clamped >= par.grid_n[0] and m_test >= par.grid_m[0] and
+                        a_test >= par.grid_a_pd[0] - 1.0 and a_test <= par.grid_a_pd[-1] + 1.0):
+                        # Clamp a for interpolation (allow extrapolation by 1 unit)
+                        a_interp = max(par.grid_a_pd[0], min(par.grid_a_pd[-1], a_test))
+                        
                         # Interpolate w(n_test, a_test)
                         w_val = linear_interp.interp_2d(
-                            par.grid_b_pd, par.grid_a_pd, w, n_test, a_test
+                            par.grid_b_pd, par.grid_a_pd, w, n_test_clamped, a_interp
                         )
                         v_test = utility.func(c_val, par) + pens.func(d_test, par) + w_val
                         
@@ -400,10 +404,15 @@ def solve(t, sol, par):
             m_test = l_val + d_test
             a_test = m_test - c_val
             
-            if (a_test >= par.grid_a_pd[0] and a_test <= par.grid_a_pd[-1] and
-                n_test >= 0 and n_test >= par.grid_n[0] and m_test >= par.grid_m[0]):
+            # Check validity (relaxed constraints)
+            n_test_clamped = max(n_test, 0.0)
+            if (n_test_clamped >= par.grid_n[0] and m_test >= par.grid_m[0] and
+                a_test >= par.grid_a_pd[0] - 1.0 and a_test <= par.grid_a_pd[-1] + 1.0):
+                # Clamp a for interpolation
+                a_interp = max(par.grid_a_pd[0], min(par.grid_a_pd[-1], a_test))
+                
                 w_val = linear_interp.interp_2d(
-                    par.grid_b_pd, par.grid_a_pd, w, n_test, a_test
+                    par.grid_b_pd, par.grid_a_pd, w, n_test_clamped, a_interp
                 )
                 v_test = utility.func(c_val, par) + pens.func(d_test, par) + w_val
                 
